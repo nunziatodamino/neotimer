@@ -3,6 +3,8 @@
 #include "timer.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <langinfo.h>
+#include <locale.h>
 #include <poll.h>
 #include <signal.h>
 #include <spawn.h>
@@ -55,18 +57,18 @@ static bool setup_terminal(void)
     return true;
 }
 
-static const char *const digits[11][5] = {
-    {" ### ", "#   #", "#   #", "#   #", " ### "},
-    {"  #  ", " ##  ", "  #  ", "  #  ", "#####"},
-    {" ### ", "#   #", "   # ", "  #  ", "#####"},
-    {"#### ", "    #", " ### ", "    #", "#### "},
-    {"#   #", "#   #", "#####", "    #", "    #"},
-    {"#####", "#    ", "#### ", "    #", "#### "},
-    {" ### ", "#    ", "#### ", "#   #", " ### "},
-    {"#####", "    #", "   # ", "  #  ", "  #  "},
-    {" ### ", "#   #", " ### ", "#   #", " ### "},
-    {" ### ", "#   #", " ####", "    #", " ### "},
-    {"     ", "  #  ", "     ", "  #  ", "     "}
+static const char *const digits[11][7] = {
+    {" #### ", "##  ##", "##  ##", "##  ##", "##  ##", "##  ##", " #### "},
+    {"  ##  ", " ###  ", "####  ", "  ##  ", "  ##  ", "  ##  ", "######"},
+    {" #### ", "##  ##", "    ##", "  ### ", " ##   ", "##    ", "######"},
+    {"##### ", "    ##", "    ##", " #### ", "    ##", "    ##", "##### "},
+    {"##  ##", "##  ##", "##  ##", "######", "    ##", "    ##", "    ##"},
+    {"######", "##    ", "##    ", "##### ", "    ##", "    ##", "##### "},
+    {" #### ", "##    ", "##    ", "##### ", "##  ##", "##  ##", " #### "},
+    {"######", "    ##", "   ## ", "  ##  ", " ##   ", " ##   ", " ##   "},
+    {" #### ", "##  ##", "##  ##", " #### ", "##  ##", "##  ##", " #### "},
+    {" #### ", "##  ##", "##  ##", " #####", "    ##", "    ##", " #### "},
+    {"  ", "##", "##", "  ", "##", "##", "  "}
 };
 
 static void centered(int row, int columns, const char *line, const char *color)
@@ -78,7 +80,7 @@ static void centered(int row, int columns, const char *line, const char *color)
     printf("\033[%d;%dH%s%.*s\033[0m", row, column, color, visible, line);
 }
 
-static void render(const Timer *timer, int64_t total_ns, bool color)
+static void render(const Timer *timer, int64_t total_ns, bool color, bool unicode)
 {
     struct winsize size = {0};
     (void)ioctl(STDOUT_FILENO, TIOCGWINSZ, &size);
@@ -86,9 +88,10 @@ static void render(const Timer *timer, int64_t total_ns, bool color)
     int rows = size.ws_row ? size.ws_row : 24;
     char time_text[32];
     format_time(timer_seconds(timer), time_text, sizeof(time_text));
-    int width = (int)strlen(time_text) * 6 - 1;
-    bool large = columns > width + 4 && rows >= 13;
-    int height = large ? 11 : (rows >= 7 ? 5 : 1);
+    int width = -2;
+    for (size_t i = 0; time_text[i]; ++i) width += (time_text[i] == ':' ? 2 : 6) + 2;
+    bool large = columns >= width + 4 && rows >= 15;
+    int height = large ? 13 : (rows >= 7 ? 5 : 1);
     int top = (rows - height) / 2 + 1;
     const char *accent = color ? (timer->paused ? "\033[33m" : "\033[36m") : "";
     const char *dim = color ? "\033[2m" : "";
@@ -103,17 +106,16 @@ static void render(const Timer *timer, int64_t total_ns, bool color)
     }
     centered(top, columns, timer->paused ? "NEOTIMER / PAUSED" : "NEOTIMER", dim);
     if (large) {
-        for (int row = 0; row < 5; ++row) {
-            char line[192];
-            size_t offset = 0;
+        for (int row = 0; row < 7; ++row) {
+            // Position by terminal cells, not UTF-8 byte length.
+            printf("\033[%d;%dH%s", top + 2 + row, (columns - width) / 2 + 1, accent);
             for (size_t i = 0; time_text[i]; ++i) {
                 int digit = time_text[i] == ':' ? 10 : time_text[i] - '0';
-                memcpy(line + offset, digits[digit][row], 5);
-                offset += 5;
-                if (time_text[i + 1]) line[offset++] = ' ';
+                for (const char *pixel = digits[digit][row]; *pixel; ++pixel)
+                    fputs(*pixel == '#' ? (unicode ? "\xe2\x96\x88" : "#") : " ", stdout);
+                if (time_text[i + 1]) fputs("  ", stdout);
             }
-            line[offset] = '\0';
-            centered(top + 2 + row, columns, line, accent);
+            fputs("\033[0m", stdout);
         }
     } else centered(top + 1, columns, time_text, accent);
     int bar_width = columns - 8;
@@ -126,7 +128,7 @@ static void render(const Timer *timer, int64_t total_ns, bool color)
         for (int i = 0; i < bar_width; ++i) bar[i + 1] = i < filled ? '=' : '-';
         bar[bar_width + 1] = ']';
         bar[bar_width + 2] = '\0';
-        centered(top + (large ? 8 : 3), columns, bar, accent);
+        centered(top + (large ? 10 : 3), columns, bar, accent);
     }
     centered(top + height - 1, columns, "Space pause/resume  |  Esc exit", dim);
     fflush(stdout);
@@ -160,6 +162,10 @@ static void usage(FILE *stream)
 
 int main(int argc, char **argv)
 {
+    (void)setlocale(LC_CTYPE, "");
+    bool unicode = strcmp(nl_langinfo(CODESET), "UTF-8") == 0;
+    // A full frame fits in this buffer, including UTF-8 block characters.
+    (void)setvbuf(stdout, NULL, _IOFBF, 8192);
     if (argc == 2 && (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))) {
         usage(stdout);
         return 0;
@@ -195,7 +201,7 @@ int main(int argc, char **argv)
     }
     while (!stopped) {
         timer_update(&timer, monotonic_ns());
-        if (interactive) render(&timer, total_ns, color);
+        if (interactive) render(&timer, total_ns, color, unicode);
         if (timer.remaining_ns == 0) break;
         struct pollfd input = {STDIN_FILENO, POLLIN, 0};
         int ready = poll(interactive ? &input : NULL, interactive ? 1 : 0, 100);

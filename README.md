@@ -1,6 +1,6 @@
 # neotimer
 
-A small, native Linux countdown with big digital digits, cyan accents, and a progress bar.
+A small, native Linux countdown with bold block digits, cyan accents, and a progress bar.
 
 ```sh
 neotimer 45m
@@ -10,6 +10,7 @@ neotimer 2h
 
 The display follows the remaining time: `01:00:00` becomes `59:59`, then `59`, and finally `00`.
 It recenters when the format or terminal size changes, with a compact layout for small windows.
+The large digits use solid blocks in UTF-8 terminals, with thick ASCII strokes in other locales.
 
 Press **Space** to pause or resume, **Esc** to exit, or **Ctrl+C** to cancel.
 The previous terminal screen and settings are restored on exit.

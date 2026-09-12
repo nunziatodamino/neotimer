@@ -24,7 +24,7 @@ class CliTests(unittest.TestCase):
         stub = Path(self.temp.name) / "notify-send"
         stub.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$NOTIFICATION_LOG"\nexit 1\n')
         stub.chmod(0o755)
-        self.env = dict(os.environ, TERM="xterm-256color", PATH=self.temp.name,
+        self.env = dict(os.environ, TERM="xterm-256color", LC_ALL="C.UTF-8", PATH=self.temp.name,
                         NOTIFICATION_LOG=str(self.log))
         self.env.pop("NO_COLOR", None)
 
@@ -90,7 +90,7 @@ class CliTests(unittest.TestCase):
         self.assertIsNone(process.poll(), "Paused timer completed")
         self.assertIn(b"PAUSED", output)
         self.assertIn(b"\x1b[36m", output)
-        self.assertIn(b" ### ", output)
+        self.assertIn("████".encode(), output)
         os.write(master, b" ")
         output += self.read_for(master, 1.1)
         self.assertEqual(process.wait(timeout=1), 0)
@@ -138,6 +138,15 @@ class CliTests(unittest.TestCase):
         output = self.read_for(master, 0.1)
         self.assertIn(b"30", output)
         self.assertNotIn(b"NEOTIMER", output)
+        os.write(master, b"\x1b")
+        process.wait(timeout=1)
+
+    def test_ascii_locale_fallback(self):
+        self.env["LC_ALL"] = "C"
+        process, master, _, _ = self.start_terminal("30s")
+        output = self.read_for(master, 0.1)
+        self.assertIn(b"#####", output)
+        self.assertNotIn("█".encode(), output)
         os.write(master, b"\x1b")
         process.wait(timeout=1)
 
