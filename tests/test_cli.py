@@ -3,6 +3,7 @@ import fcntl
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import signal
 import struct
@@ -75,6 +76,57 @@ class CliTests(unittest.TestCase):
             os.write(master, b"\x1b")
             self.assertEqual(process.wait(timeout=1), 0)
             self.assertEqual(termios.tcgetattr(slave), original)
+
+    def test_easter_egg_plain_output_and_hidden_command(self):
+        result = subprocess.run([BINARY, "pipi"], capture_output=True, env=self.env, timeout=1)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"Time i can stay without you\n00:00\n")
+        self.assertEqual(result.stderr, b"")
+        self.assertFalse(self.log.exists())
+        help_result = subprocess.run([BINARY, "--help"], capture_output=True, env=self.env)
+        self.assertNotIn(b"pipi", help_result.stdout)
+        for args in (["pipi", "1s"], ["1s", "pipi"], ["PIPI"]):
+            result = subprocess.run([BINARY, *args], capture_output=True, env=self.env)
+            self.assertEqual(result.returncode, 2)
+
+    def test_easter_egg_rainbow_ignores_space_and_exits(self):
+        process, master, slave, original = self.start_terminal("pipi")
+        output = self.read_for(master, 0.2)
+        self.assertIn(b"Time i can stay without you", output)
+        self.assertIn("████".encode(), output)
+        for color in range(31, 37):
+            self.assertIn(f"\x1b[{color}m".encode(), output)
+        self.assertIn(b"Esc exit  |  Ctrl+C exit", output)
+        self.assertNotIn(b"pause/resume", output)
+        os.write(master, b" ")
+        output = self.read_for(master, 1.1)
+        self.assertIsNone(process.poll(), "Easter egg exited instead of staying at zero")
+        self.assertNotIn(b"PAUSED", output)
+        self.assertNotIn(b"[paused]", output)
+        # Check the literal zero in the compact layout after a terminal resize.
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 8, 40, 0, 0))
+        output = self.read_for(master, 0.2)
+        plain = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", output)
+        self.assertIn(b"00:00", plain)
+        self.assertNotIn(b"00:01", plain)
+        os.write(master, b"\x1b")
+        self.assertEqual(process.wait(timeout=1), 0)
+        self.assertEqual(termios.tcgetattr(slave), original)
+        self.assertFalse(self.log.exists())
+
+    def test_easter_egg_no_color_and_interrupt_cleanup(self):
+        self.env["NO_COLOR"] = "1"
+        process, master, slave, original = self.start_terminal("pipi", columns=40, rows=8)
+        output = self.read_for(master, 0.15)
+        self.assertIn(b"Time i can stay without you", output)
+        self.assertIn(b"00:00", output)
+        self.assertNotRegex(output, rb"\x1b\[3[0-7]m")
+        process.send_signal(signal.SIGINT)
+        output = self.read_for(master, 0.15)
+        self.assertEqual(process.wait(timeout=1), 130)
+        self.assertIn(b"\x1b[?25h\x1b[?1049l", output)
+        self.assertEqual(termios.tcgetattr(slave), original)
+        self.assertFalse(self.log.exists())
 
     def test_redirected_completion_and_notification_failure(self):
         start = time.monotonic()

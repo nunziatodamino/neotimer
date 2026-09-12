@@ -80,18 +80,40 @@ static void centered(int row, int columns, const char *line, const char *color)
     printf("\033[%d;%dH%s%.*s\033[0m", row, column, color, visible, line);
 }
 
-static void render(const Timer *timer, int64_t total_ns, bool color, bool unicode)
+static const char *rainbow_color(size_t offset)
+{
+    static const char *const colors[] = {
+        "\033[31m", "\033[33m", "\033[32m", "\033[36m", "\033[34m", "\033[35m"
+    };
+    return colors[offset % (sizeof(colors) / sizeof(colors[0]))];
+}
+
+static void centered_rainbow(int row, int columns, const char *line, size_t phase, bool color)
+{
+    if (!color) { centered(row, columns, line, ""); return; }
+    int length = (int)strlen(line);
+    int visible = length < columns - 1 ? length : columns - 1;
+    if (visible < 1) return;
+    printf("\033[%d;%dH", row, (columns - visible) / 2 + 1);
+    for (int i = 0; i < visible; ++i)
+        printf("%s%c", rainbow_color(phase + (size_t)i), line[i]);
+    fputs("\033[0m", stdout);
+}
+
+static void render(const Timer *timer, int64_t total_ns, bool color, bool unicode, bool easter_egg)
 {
     struct winsize size = {0};
     (void)ioctl(STDOUT_FILENO, TIOCGWINSZ, &size);
     int columns = size.ws_col ? size.ws_col : 80;
     int rows = size.ws_row ? size.ws_row : 24;
     char time_text[32];
-    format_time(timer_seconds(timer), time_text, sizeof(time_text));
+    if (easter_egg) snprintf(time_text, sizeof(time_text), "00:00");
+    else format_time(timer_seconds(timer), time_text, sizeof(time_text));
+    size_t phase = easter_egg ? (size_t)((monotonic_ns() / 200000000) % 6) : 0;
     int width = -2;
     for (size_t i = 0; time_text[i]; ++i) width += (time_text[i] == ':' ? 2 : 6) + 2;
     bool large = columns >= width + 4 && rows >= 15;
-    int height = large ? 13 : (rows >= 7 ? 5 : 1);
+    int height = large ? 13 : (rows >= 7 ? 5 : (easter_egg && rows >= 3 ? 3 : 1));
     int top = (rows - height) / 2 + 1;
     const char *accent = color ? (timer->paused ? "\033[33m" : "\033[36m") : "";
     const char *dim = color ? "\033[2m" : "";
@@ -100,16 +122,19 @@ static void render(const Timer *timer, int64_t total_ns, bool color, bool unicod
     if (height == 1) {
         char compact[64];
         snprintf(compact, sizeof(compact), "%s%s", time_text, timer->paused ? " [paused]" : "");
-        centered(top, columns, compact, accent);
+        if (easter_egg) centered_rainbow(top, columns, time_text, phase, color);
+        else centered(top, columns, compact, accent);
         fflush(stdout);
         return;
     }
-    centered(top, columns, timer->paused ? "NEOTIMER / PAUSED" : "NEOTIMER", dim);
+    centered(top, columns, easter_egg ? "Time i can stay without you"
+                                    : (timer->paused ? "NEOTIMER / PAUSED" : "NEOTIMER"), dim);
     if (large) {
         for (int row = 0; row < 7; ++row) {
             // Position by terminal cells, not UTF-8 byte length.
             printf("\033[%d;%dH%s", top + 2 + row, (columns - width) / 2 + 1, accent);
             for (size_t i = 0; time_text[i]; ++i) {
+                if (easter_egg && color) fputs(rainbow_color(phase + i + (size_t)row), stdout);
                 int digit = time_text[i] == ':' ? 10 : time_text[i] - '0';
                 for (const char *pixel = digits[digit][row]; *pixel; ++pixel)
                     fputs(*pixel == '#' ? (unicode ? "\xe2\x96\x88" : "#") : " ", stdout);
@@ -117,10 +142,11 @@ static void render(const Timer *timer, int64_t total_ns, bool color, bool unicod
             }
             fputs("\033[0m", stdout);
         }
-    } else centered(top + 1, columns, time_text, accent);
+    } else if (easter_egg) centered_rainbow(top + 1, columns, time_text, phase, color);
+    else centered(top + 1, columns, time_text, accent);
     int bar_width = columns - 8;
     if (bar_width > 42) bar_width = 42;
-    if (bar_width >= 4) {
+    if (!easter_egg && bar_width >= 4) {
         char bar[48];
         double progress = 1.0 - (double)timer->remaining_ns / (double)total_ns;
         int filled = (int)(progress * bar_width);
@@ -130,7 +156,8 @@ static void render(const Timer *timer, int64_t total_ns, bool color, bool unicod
         bar[bar_width + 2] = '\0';
         centered(top + (large ? 10 : 3), columns, bar, accent);
     }
-    centered(top + height - 1, columns, "Space pause/resume  |  Esc exit", dim);
+    centered(top + height - 1, columns,
+             easter_egg ? "Esc exit  |  Ctrl+C exit" : "Space pause/resume  |  Esc exit", dim);
     fflush(stdout);
 }
 
@@ -171,8 +198,10 @@ int main(int argc, char **argv)
         usage(stdout);
         return 0;
     }
-    int64_t seconds;
-    if (!parse_duration(argc - 1, argv + 1, &seconds)) {
+    // Hidden dedication: a rainbow zero that stays on screen until the user exits.
+    bool easter_egg = argc == 2 && !strcmp(argv[1], "pipi");
+    int64_t seconds = 0;
+    if (!easter_egg && !parse_duration(argc - 1, argv + 1, &seconds)) {
         fputs("neotimer: invalid duration. Use e.g. 45m, 1h 40m, or 1h40m30s; "
               "the total must be positive and at most 9223372036 seconds.\n", stderr);
         usage(stderr);
@@ -196,15 +225,19 @@ int main(int argc, char **argv)
     bool cancelled = false;
     bool failed = false;
     if (!interactive) {
+        if (easter_egg) {
+            puts("Time i can stay without you\n00:00");
+            return 0;
+        }
         char initial[32];
         format_time(seconds, initial, sizeof(initial));
         printf("neotimer: started %s countdown.\n", initial);
         fflush(stdout);
     }
     while (!stopped) {
-        timer_update(&timer, monotonic_ns());
-        if (interactive) render(&timer, total_ns, color, unicode);
-        if (timer.remaining_ns == 0) break;
+        if (!easter_egg) timer_update(&timer, monotonic_ns());
+        if (interactive) render(&timer, total_ns, color, unicode, easter_egg);
+        if (!easter_egg && timer.remaining_ns == 0) break;
         struct pollfd input = {STDIN_FILENO, POLLIN, 0};
         int ready = poll(interactive ? &input : NULL, interactive ? 1 : 0, 100);
         if (ready < 0 && errno != EINTR) { failed = true; break; }
@@ -216,7 +249,7 @@ int main(int argc, char **argv)
                 if (count < 0 && errno != EINTR) { failed = true; break; }
                 for (ssize_t i = 0; i < count; ++i) {
                     if (keys[i] == '\033') { cancelled = true; break; }
-                    if (keys[i] == ' ') timer_toggle(&timer, monotonic_ns());
+                    if (!easter_egg && keys[i] == ' ') timer_toggle(&timer, monotonic_ns());
                 }
                 if (cancelled) break;
             }
@@ -224,6 +257,7 @@ int main(int argc, char **argv)
     }
     restore_terminal();
     if (failed) { fputs("neotimer: terminal input failed.\n", stderr); return 1; }
+    if (easter_egg) return stopped ? 128 + stopped : 0;
     if (stopped || cancelled) {
         puts("neotimer: cancelled.");
         return stopped ? 128 + stopped : 0;
