@@ -34,7 +34,8 @@ class CliTests(unittest.TestCase):
         self.addCleanup(os.close, slave)
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
         original = termios.tcgetattr(slave)
-        process = subprocess.Popen([BINARY, duration], stdin=slave, stdout=slave,
+        args = [duration] if isinstance(duration, str) else duration
+        process = subprocess.Popen([BINARY, *args], stdin=slave, stdout=slave,
                                    stderr=slave, env=self.env)
         def cleanup():
             if process.poll() is None:
@@ -56,10 +57,24 @@ class CliTests(unittest.TestCase):
         result = subprocess.run([BINARY, "--help"], capture_output=True, env=self.env)
         self.assertEqual(result.returncode, 0)
         self.assertIn(b"Space", result.stdout)
-        for args in ([], ["0s"], ["1.5m"], ["-2h"], ["2s", "3m"], ["999999999999999999h"]):
+        for args in ([], ["0s"], ["1.5m"], ["-2h"], ["1h", "40"], ["1h", "-40m"],
+                     ["0h", "0m"], ["1h", ""], ["9223372036s", "1s"], ["999999999999999999h"]):
             result = subprocess.run([BINARY, *args], capture_output=True, env=self.env)
             self.assertEqual(result.returncode, 2)
             self.assertIn(b"Usage:", result.stderr)
+
+    def test_combined_durations(self):
+        for duration, expected in ((["1h", "40m"], b"01:40:00"),
+                                   ("1h40m", b"01:40:00"),
+                                   ("1h 40m", b"01:40:00"),
+                                   (["1h", "40m", "30s"], b"01:40:30")):
+            process, master, slave, original = self.start_terminal(duration, columns=24, rows=8)
+            output = self.read_for(master, 0.15)
+            self.assertIsNone(process.poll())
+            self.assertIn(expected, output)
+            os.write(master, b"\x1b")
+            self.assertEqual(process.wait(timeout=1), 0)
+            self.assertEqual(termios.tcgetattr(slave), original)
 
     def test_redirected_completion_and_notification_failure(self):
         start = time.monotonic()

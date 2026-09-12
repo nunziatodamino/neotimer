@@ -152,9 +152,10 @@ static void notify_completion(const char *duration)
 
 static void usage(FILE *stream)
 {
-    fputs("Usage: neotimer <N{s|m|h}>\n\n"
-          "Start a countdown: neotimer 45m, neotimer 30s, neotimer 2h\n"
-          "N must be a positive integer. Use one duration, without spaces.\n\n"
+    fputs("Usage: neotimer <N{s|m|h}> [N{s|m|h} ...]\n\n"
+          "Examples: neotimer 45m, neotimer 1h 40m, neotimer 1h40m30s\n"
+          "Combine integer hours, minutes, and seconds, with or without spaces.\n"
+          "Components must be nonnegative; the total must be positive.\n\n"
           "Space  Pause/resume\nEsc    Exit\nCtrl+C Exit\n\n"
           "Sends a silent desktop notification at completion when notify-send is available.\n"
           "Set NO_COLOR to disable colors.\n", stream);
@@ -171,8 +172,9 @@ int main(int argc, char **argv)
         return 0;
     }
     int64_t seconds;
-    if (argc != 2 || !parse_duration(argv[1], &seconds)) {
-        fputs("neotimer: expected a positive integer followed by s, m, or h (within supported range).\n", stderr);
+    if (!parse_duration(argc - 1, argv + 1, &seconds)) {
+        fputs("neotimer: invalid duration. Use e.g. 45m, 1h 40m, or 1h40m30s; "
+              "the total must be positive and at most 9223372036 seconds.\n", stderr);
         usage(stderr);
         return 2;
     }

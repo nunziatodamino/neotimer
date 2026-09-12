@@ -6,6 +6,8 @@ A small, native Linux countdown with bold block digits, cyan accents, and a prog
 neotimer 45m
 neotimer 30s
 neotimer 2h
+neotimer 1h 40m
+neotimer 1h40m30s
 ```
 
 The display follows the remaining time: `01:00:00` becomes `59:59`, then `59`, and finally `00`.
@@ -37,8 +39,10 @@ Use `make uninstall` with the same prefix to remove the installed binary.
 
 ## Behavior
 
-- Supply one positive integer immediately followed by lowercase `s`, `m`, or `h`.
-  Fractions, combined durations, zero, and negative durations are rejected.
+- Supply integer components immediately followed by lowercase `s`, `m`, or `h`.
+  Combine them with or without spaces: `1h 40m`, `1h40m`, and `"1h 40m"` all mean 100 minutes.
+  Components are added together, in any order, including repeated units.
+  Zero components are allowed when the total is positive; fractions and negatives are rejected.
   The maximum duration is 9,223,372,036 seconds (or the largest whole minutes/hours within that limit).
 - Timing uses a monotonic clock and excludes paused time. The event loop sleeps between updates.
 - At completion, a message is printed and an optional desktop notification is sent using `notify-send`.

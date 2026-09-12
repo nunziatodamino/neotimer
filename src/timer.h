@@ -2,6 +2,7 @@
 #define NEOTIMER_TIMER_H
 
 #include <stdbool.h>
+#include <ctype.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -13,26 +14,37 @@ typedef struct {
     bool paused;
 } Timer;
 
-static bool parse_duration(const char *input, int64_t *seconds)
+static bool parse_duration(int count, char *const inputs[], int64_t *seconds)
 {
-    const unsigned char *p = (const unsigned char *)input;
-    int64_t value = 0;
     const int64_t limit = INT64_MAX / NS_PER_SECOND;
-    if (*p < '0' || *p > '9') return false;
-    while (*p >= '0' && *p <= '9') {
-        int digit = *p++ - '0';
-        if (value > (limit - digit) / 10) return false;
-        value = value * 10 + digit;
+    int64_t total = 0;
+    for (int i = 0; i < count; ++i) {
+        const unsigned char *p = (const unsigned char *)inputs[i];
+        while (isspace(*p)) ++p;
+        if (!*p) return false;
+        while (*p) {
+            int64_t value = 0;
+            if (*p < '0' || *p > '9') return false;
+            while (*p >= '0' && *p <= '9') {
+                int digit = *p++ - '0';
+                if (value > (limit - digit) / 10) return false;
+                value = value * 10 + digit;
+            }
+            int64_t multiplier;
+            switch (*p) {
+            case 's': multiplier = 1; break;
+            case 'm': multiplier = 60; break;
+            case 'h': multiplier = 3600; break;
+            default: return false;
+            }
+            if (value > (limit - total) / multiplier) return false;
+            total += value * multiplier;
+            ++p;
+            while (isspace(*p)) ++p;
+        }
     }
-    int64_t multiplier;
-    switch (*p) {
-    case 's': multiplier = 1; break;
-    case 'm': multiplier = 60; break;
-    case 'h': multiplier = 3600; break;
-    default: return false;
-    }
-    if (p[1] != '\0' || value == 0 || value > limit / multiplier) return false;
-    *seconds = value * multiplier;
+    if (total == 0) return false;
+    *seconds = total;
     return true;
 }
 
